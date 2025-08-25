@@ -1,6 +1,7 @@
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 #define WINDOW_WIDTH 600
@@ -14,35 +15,40 @@ typedef struct {
   SDL_Renderer *renderer;
   float scale_factor;
   int running;
+  SDL_FPoint *circle_points;
+  int circle_point_count;
 } Clock;
 
 void draw_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2) {
   SDL_RenderLine(renderer, x1, y1, x2, y2);
 }
 
-void draw_circle_outline(SDL_Renderer *renderer, int center_x, int center_y,
-                         int radius) {
-  int x = 0;
-  int y = radius;
-  int d = 3 - 1 * radius;
+void precompute_circle(Clock *clock, int radius) {
+  const int segments = 720; // Very high quality for retina
+  clock->circle_point_count = segments + 1;
+  clock->circle_points = malloc(clock->circle_point_count * sizeof(SDL_FPoint));
 
-  while (y >= x) {
-    SDL_RenderPoint(renderer, center_x + x, center_y + y);
-    SDL_RenderPoint(renderer, center_x - x, center_y + y);
-    SDL_RenderPoint(renderer, center_x + x, center_y - y);
-    SDL_RenderPoint(renderer, center_x - x, center_y - y);
-    SDL_RenderPoint(renderer, center_x + y, center_y + x);
-    SDL_RenderPoint(renderer, center_x - y, center_y + x);
-    SDL_RenderPoint(renderer, center_x + y, center_y - x);
-    SDL_RenderPoint(renderer, center_x - y, center_y - x);
+  for (int i = 0; i <= segments; i++) {
+    float angle = (float)i * 2.0f * M_PI / segments;
+    clock->circle_points[i].x = radius * cosf(angle);
+    clock->circle_points[i].y = radius * sinf(angle);
+  }
+}
 
-    if (d < 0) {
-      d = d + 4 * x + 6;
-    } else {
-      d = d + 4 * (x - y) + 10;
-      y--;
-    }
-    x++;
+void draw_circle_outline(SDL_Renderer *renderer, Clock *clock, int center_x,
+                         int center_y) {
+  // Transform precomputed points to screen position
+  for (int i = 0; i < clock->circle_point_count; i++) {
+    clock->circle_points[i].x += center_x;
+    clock->circle_points[i].y += center_y;
+  }
+
+  SDL_RenderLines(renderer, clock->circle_points, clock->circle_point_count);
+
+  // Restore relative coordinates for next use
+  for (int i = 0; i < clock->circle_point_count; i++) {
+    clock->circle_points[i].x -= center_x;
+    clock->circle_points[i].y -= center_y;
   }
 }
 
@@ -100,8 +106,7 @@ void render_clock(Clock *clock) {
   int scaled_center_y = (int)(CENTER_Y * clock->scale_factor);
   int scaled_radius = (int)(CLOCK_RADIUS * clock->scale_factor);
 
-  draw_circle_outline(clock->renderer, scaled_center_x, scaled_center_y,
-                      scaled_radius);
+  draw_circle_outline(clock->renderer, clock, scaled_center_x, scaled_center_y);
   draw_hour_markers(clock->renderer, scaled_center_x, scaled_center_y,
                     scaled_radius);
 
@@ -122,8 +127,17 @@ void render_clock(Clock *clock) {
             (int)(200 * clock->scale_factor), (int)(2 * clock->scale_factor));
 
   SDL_SetRenderDrawColor(clock->renderer, 255, 255, 255, 255);
-  draw_circle_outline(clock->renderer, scaled_center_x, scaled_center_y,
-                      (int)(8 * clock->scale_factor));
+  // Small center circle - use simple approach for tiny circles
+  const int segments = 32;
+  SDL_FPoint center_points[segments + 1];
+  int small_radius = (int)(8 * clock->scale_factor);
+
+  for (int i = 0; i <= segments; i++) {
+    float angle = (float)i * 2.0f * M_PI / segments;
+    center_points[i].x = scaled_center_x + small_radius * cosf(angle);
+    center_points[i].y = scaled_center_y + small_radius * sinf(angle);
+  }
+  SDL_RenderLines(clock->renderer, center_points, segments + 1);
 
   SDL_RenderPresent(clock->renderer);
 }
@@ -155,10 +169,15 @@ int init_clock(Clock *clock) {
 
   clock->scale_factor = SDL_GetWindowPixelDensity(clock->window);
   clock->running = 1;
+
+  // Precompute circle points for main clock face
+  precompute_circle(clock, (int)(CLOCK_RADIUS * clock->scale_factor));
+
   return 1;
 }
 
 void cleanup_clock(Clock *clock) {
+  free(clock->circle_points);
   SDL_DestroyRenderer(clock->renderer);
   SDL_DestroyWindow(clock->window);
   SDL_Quit();
