@@ -129,8 +129,8 @@ void render_clock(Clock *clock) {
   // printf("Current time: %02d:%02d:%02d.%03d\n", hours == 0 ? 12 : hours,
   //       minutes, seconds, milliseconds);
   double hour_angle = (hours * 30.0) + (minutes * 0.5);
-  double minute_angle = minutes * 6.0;
-  double second_angle = seconds * 6.0 + (milliseconds * 0.006);
+  double minute_angle = (minutes * 6.0) + (seconds * 0.1);
+  double second_angle = (seconds * 6.0) + (milliseconds * 0.006);
 
   draw_hand(clock->renderer, scaled_center_x, scaled_center_y, hour_angle,
             (int)(120 * clock->scale_factor), (int)(6 * clock->scale_factor));
