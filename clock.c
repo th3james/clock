@@ -24,7 +24,7 @@ void draw_line(SDL_Renderer *renderer, int x1, int y1, int x2, int y2) {
 }
 
 void precompute_circle(Clock *clock, int radius) {
-  const int segments = 720; // Very high quality for retina
+  const int segments = 720;
   clock->circle_point_count = segments + 1;
   clock->circle_points = malloc(clock->circle_point_count * sizeof(SDL_FPoint));
 
@@ -84,16 +84,26 @@ void draw_hour_markers(SDL_Renderer *renderer, int center_x, int center_y,
   }
 }
 
-void get_current_time(int *hours, int *minutes, int *seconds) {
-  time_t raw_time;
-  struct tm *time_info;
+int get_current_time(int *hours, int *minutes, int *seconds,
+                     int *milliseconds) {
+  struct timespec ts;
 
-  time(&raw_time);
-  time_info = localtime(&raw_time);
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+    return -1;
+  }
+
+  struct tm *time_info = localtime(&ts.tv_sec);
+  if (time_info == NULL) {
+    return -1;
+  }
 
   *hours = time_info->tm_hour % 12;
   *minutes = time_info->tm_min;
   *seconds = time_info->tm_sec;
+  // printf("tv_sec: %03li\n", ts.tv_sec);
+  *milliseconds = (ts.tv_nsec / 1000000);
+
+  return 0;
 }
 
 void render_clock(Clock *clock) {
@@ -110,12 +120,17 @@ void render_clock(Clock *clock) {
   draw_hour_markers(clock->renderer, scaled_center_x, scaled_center_y,
                     scaled_radius);
 
-  int hours, minutes, seconds;
-  get_current_time(&hours, &minutes, &seconds);
+  int hours, minutes, seconds, milliseconds;
+  if (get_current_time(&hours, &minutes, &seconds, &milliseconds) != 0) {
+    fprintf(stderr, "Error: Unable to get current time\n");
+    exit(EXIT_FAILURE);
+  }
 
+  // printf("Current time: %02d:%02d:%02d.%03d\n", hours == 0 ? 12 : hours,
+  //       minutes, seconds, milliseconds);
   double hour_angle = (hours * 30.0) + (minutes * 0.5);
   double minute_angle = minutes * 6.0;
-  double second_angle = seconds * 6.0;
+  double second_angle = seconds * 6.0 + (milliseconds * 0.006);
 
   draw_hand(clock->renderer, scaled_center_x, scaled_center_y, hour_angle,
             (int)(120 * clock->scale_factor), (int)(6 * clock->scale_factor));
@@ -205,7 +220,7 @@ int main(void) {
   while (clock.running) {
     handle_events(&clock);
     render_clock(&clock);
-    SDL_Delay(16);
+    SDL_Delay(100);
   }
 
   cleanup_clock(&clock);
