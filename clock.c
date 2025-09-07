@@ -13,7 +13,8 @@
 #define CENTER_Y (WINDOW_HEIGHT / 2)
 
 typedef struct {
-  float x, y;
+  float x, y, z;
+  float nx, ny, nz; // Normal vector for lighting
 } Vertex;
 
 typedef struct {
@@ -25,22 +26,55 @@ typedef struct {
   GLuint vao, vbo;
   Vertex *circle_vertices;
   int circle_vertex_count;
+  Vertex *hand_vertices;
+  int hand_vertex_count;
 } Clock;
 
 const char *vertex_shader_source =
     "#version 330 core\n"
-    "layout (location = 0) in vec2 aPos;\n"
+    "layout (location = 0) in vec3 aPos;\n"
+    "layout (location = 1) in vec3 aNormal;\n"
     "uniform mat4 projection;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 model;\n"
+    "out vec3 FragPos;\n"
+    "out vec3 Normal;\n"
     "void main() {\n"
-    "    gl_Position = projection * vec4(aPos, 0.0, 1.0);\n"
+    "    FragPos = vec3(model * vec4(aPos, 1.0));\n"
+    "    Normal = mat3(transpose(inverse(model))) * aNormal;\n"
+    "    gl_Position = projection * view * vec4(FragPos, 1.0);\n"
     "}\0";
 
-const char *fragment_shader_source = "#version 330 core\n"
-                                     "out vec4 FragColor;\n"
-                                     "uniform vec3 color;\n"
-                                     "void main() {\n"
-                                     "    FragColor = vec4(color, 1.0f);\n"
-                                     "}\0";
+const char *fragment_shader_source =
+    "#version 330 core\n"
+    "out vec4 FragColor;\n"
+    "in vec3 FragPos;\n"
+    "in vec3 Normal;\n"
+    "uniform vec3 color;\n"
+    "uniform vec3 lightPos;\n"
+    "uniform vec3 lightColor;\n"
+    "uniform vec3 viewPos;\n"
+    "void main() {\n"
+    "    // Ambient\n"
+    "    float ambientStrength = 0.15;\n"
+    "    vec3 ambient = ambientStrength * lightColor;\n"
+    "    \n"
+    "    // Diffuse\n"
+    "    vec3 norm = normalize(Normal);\n"
+    "    vec3 lightDir = normalize(lightPos - FragPos);\n"
+    "    float diff = max(dot(norm, lightDir), 0.0);\n"
+    "    vec3 diffuse = diff * lightColor;\n"
+    "    \n"
+    "    // Specular\n"
+    "    float specularStrength = 0.5;\n"
+    "    vec3 viewDir = normalize(viewPos - FragPos);\n"
+    "    vec3 reflectDir = reflect(-lightDir, norm);\n"
+    "    float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32);\n"
+    "    vec3 specular = specularStrength * spec * lightColor;\n"
+    "    \n"
+    "    vec3 result = (ambient + diffuse + specular) * color;\n"
+    "    FragColor = vec4(result, 1.0);\n"
+    "}\0";
 
 GLuint compile_shader(GLenum type, const char *source) {
   GLuint shader = glCreateShader(type);
@@ -82,110 +116,218 @@ GLuint create_shader_program(void) {
   return program;
 }
 
-void create_projection_matrix(float *matrix, int width, int height) {
-  // Orthographic projection matrix for 2D rendering
+void create_identity_matrix(float *matrix) {
   memset(matrix, 0, 16 * sizeof(float));
-  matrix[0] = 2.0f / width;   // Scale X
-  matrix[5] = -2.0f / height; // Scale Y (flipped for screen coords)
-  matrix[10] = -1.0f;         // Z scale
-  matrix[12] = -1.0f;         // X offset
-  matrix[13] = 1.0f;          // Y offset
-  matrix[15] = 1.0f;          // W component
+  matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1.0f;
+}
+
+void create_perspective_matrix(float *matrix, float fov, float aspect,
+                               float near, float far) {
+  memset(matrix, 0, 16 * sizeof(float));
+  float f = 1.0f / tanf(fov * M_PI / 360.0f); // fov/2 in radians
+  matrix[0] = f / aspect;
+  matrix[5] = f;
+  matrix[10] = (far + near) / (near - far);
+  matrix[11] = -1.0f;
+  matrix[14] = (2.0f * far * near) / (near - far);
+}
+
+void create_view_matrix(float *matrix, float eye_x, float eye_y, float eye_z,
+                        float center_x, float center_y, float center_z,
+                        float up_x, float up_y, float up_z) {
+  // Create lookAt matrix
+  float forward_x = center_x - eye_x;
+  float forward_y = center_y - eye_y;
+  float forward_z = center_z - eye_z;
+
+  // Normalize forward vector
+  float f_length = sqrtf(forward_x * forward_x + forward_y * forward_y +
+                         forward_z * forward_z);
+  forward_x /= f_length;
+  forward_y /= f_length;
+  forward_z /= f_length;
+
+  // Calculate right vector (forward x up)
+  float right_x = forward_y * up_z - forward_z * up_y;
+  float right_y = forward_z * up_x - forward_x * up_z;
+  float right_z = forward_x * up_y - forward_y * up_x;
+
+  // Normalize right vector
+  float r_length =
+      sqrtf(right_x * right_x + right_y * right_y + right_z * right_z);
+  right_x /= r_length;
+  right_y /= r_length;
+  right_z /= r_length;
+
+  // Calculate up vector (right x forward)
+  float true_up_x = right_y * forward_z - right_z * forward_y;
+  float true_up_y = right_z * forward_x - right_x * forward_z;
+  float true_up_z = right_x * forward_y - right_y * forward_x;
+
+  memset(matrix, 0, 16 * sizeof(float));
+  matrix[0] = right_x;
+  matrix[4] = right_y;
+  matrix[8] = right_z;
+  matrix[1] = true_up_x;
+  matrix[5] = true_up_y;
+  matrix[9] = true_up_z;
+  matrix[2] = -forward_x;
+  matrix[6] = -forward_y;
+  matrix[10] = -forward_z;
+  matrix[15] = 1.0f;
+
+  matrix[12] = -(right_x * eye_x + right_y * eye_y + right_z * eye_z);
+  matrix[13] = -(true_up_x * eye_x + true_up_y * eye_y + true_up_z * eye_z);
+  matrix[14] = forward_x * eye_x + forward_y * eye_y + forward_z * eye_z;
+}
+
+void create_circle_outline_3d(Vertex *vertices, int *vertex_count, float radius,
+                              int segments) {
+  int idx = 0;
+
+  // Create a simple ring of triangles for the clock outline
+  for (int i = 0; i < segments; i++) {
+    float angle1 = (float)i * 2.0f * M_PI / segments;
+    float angle2 = (float)(i + 1) * 2.0f * M_PI / segments;
+
+    float x1 = radius * cosf(angle1);
+    float y1 = radius * sinf(angle1);
+    float x2 = radius * cosf(angle2);
+    float y2 = radius * sinf(angle2);
+
+    float inner_radius = radius - 10;
+    float ix1 = inner_radius * cosf(angle1);
+    float iy1 = inner_radius * sinf(angle1);
+    float ix2 = inner_radius * cosf(angle2);
+    float iy2 = inner_radius * sinf(angle2);
+
+    // Outer triangle
+    vertices[idx++] = (Vertex){x1, y1, 0, 0, 0, 1};
+    vertices[idx++] = (Vertex){x2, y2, 0, 0, 0, 1};
+    vertices[idx++] = (Vertex){ix1, iy1, 0, 0, 0, 1};
+
+    // Inner triangle
+    vertices[idx++] = (Vertex){ix1, iy1, 0, 0, 0, 1};
+    vertices[idx++] = (Vertex){x2, y2, 0, 0, 0, 1};
+    vertices[idx++] = (Vertex){ix2, iy2, 0, 0, 0, 1};
+  }
+
+  *vertex_count = idx;
 }
 
 void precompute_circle(Clock *clock, int radius) {
-  const int segments = 720;
-  clock->circle_vertex_count = segments + 1;
-  clock->circle_vertices = malloc(clock->circle_vertex_count * sizeof(Vertex));
-
-  for (int i = 0; i <= segments; i++) {
-    float angle = (float)i * 2.0f * M_PI / segments;
-    clock->circle_vertices[i].x = CENTER_X + radius * cosf(angle);
-    clock->circle_vertices[i].y = CENTER_Y + radius * sinf(angle);
-  }
+  const int segments = 60;
+  create_circle_outline_3d(clock->circle_vertices, &clock->circle_vertex_count,
+                           radius, segments);
 }
 
-void draw_circle_outline(Clock *clock) {
+void draw_3d_object(Clock *clock, Vertex *vertices, int vertex_count) {
   glBindBuffer(GL_ARRAY_BUFFER, clock->vbo);
-  glBufferData(GL_ARRAY_BUFFER, clock->circle_vertex_count * sizeof(Vertex),
-               clock->circle_vertices, GL_DYNAMIC_DRAW);
-
-  glBindVertexArray(clock->vao);
-  glDrawArrays(GL_LINE_STRIP, 0, clock->circle_vertex_count);
-}
-
-void draw_hand(Clock *clock, int center_x, int center_y, double angle,
-               int length, int thickness) {
-  double radians = angle * M_PI / 180.0;
-  float end_x = center_x + length * sin(radians);
-  float end_y = center_y - length * cos(radians);
-
-  // Calculate perpendicular vector for thickness
-  float perp_x = -cos(radians) * thickness * 0.5f;
-  float perp_y = -sin(radians) * thickness * 0.5f;
-
-  // Create quad vertices for thick hand
-  Vertex hand_vertices[6]; // Two triangles
-
-  // Triangle 1
-  hand_vertices[0] = (Vertex){center_x - perp_x, center_y - perp_y};
-  hand_vertices[1] = (Vertex){center_x + perp_x, center_y + perp_y};
-  hand_vertices[2] = (Vertex){end_x + perp_x, end_y + perp_y};
-
-  // Triangle 2
-  hand_vertices[3] = (Vertex){center_x - perp_x, center_y - perp_y};
-  hand_vertices[4] = (Vertex){end_x + perp_x, end_y + perp_y};
-  hand_vertices[5] = (Vertex){end_x - perp_x, end_y - perp_y};
-
-  glBindBuffer(GL_ARRAY_BUFFER, clock->vbo);
-  glBufferData(GL_ARRAY_BUFFER, 6 * sizeof(Vertex), hand_vertices,
+  glBufferData(GL_ARRAY_BUFFER, vertex_count * sizeof(Vertex), vertices,
                GL_DYNAMIC_DRAW);
 
   glBindVertexArray(clock->vao);
-  glDrawArrays(GL_TRIANGLES, 0, 6);
+  glDrawArrays(GL_TRIANGLES, 0, vertex_count);
 }
 
-void draw_hour_markers(Clock *clock, int center_x, int center_y, int radius) {
-  int marker_length = radius / 12;
-  int marker_thickness = radius / 80;
+void create_hand_vertices(Vertex *vertices, int *vertex_count, double angle,
+                          float length, float thickness) {
+  double radians = angle * M_PI / 180.0;
+  float end_x = length * sin(radians);
+  float end_y =
+      length * cos(radians); // Fixed: removed negative to correct Y direction
 
-  Vertex marker_vertices[12 * 6]; // 12 markers, 6 vertices each (2 triangles)
-  int vertex_index = 0;
+  float half_thick = thickness * 0.5f;
+
+  // Calculate perpendicular vector for width
+  float perp_x = -cos(radians) * half_thick;
+  float perp_y = -sin(radians) * half_thick;
+
+  int idx = 0;
+
+  // Create a simple 3D rectangular hand with proper normals
+  // Front face (z = 2)
+  vertices[idx++] = (Vertex){-perp_x, -perp_y, 2, 0, 0, 1};
+  vertices[idx++] = (Vertex){perp_x, perp_y, 2, 0, 0, 1};
+  vertices[idx++] = (Vertex){end_x + perp_x, end_y + perp_y, 2, 0, 0, 1};
+
+  vertices[idx++] = (Vertex){-perp_x, -perp_y, 2, 0, 0, 1};
+  vertices[idx++] = (Vertex){end_x + perp_x, end_y + perp_y, 2, 0, 0, 1};
+  vertices[idx++] = (Vertex){end_x - perp_x, end_y - perp_y, 2, 0, 0, 1};
+
+  // Back face (z = -2)
+  vertices[idx++] = (Vertex){perp_x, perp_y, -2, 0, 0, -1};
+  vertices[idx++] = (Vertex){-perp_x, -perp_y, -2, 0, 0, -1};
+  vertices[idx++] = (Vertex){end_x - perp_x, end_y - perp_y, -2, 0, 0, -1};
+
+  vertices[idx++] = (Vertex){perp_x, perp_y, -2, 0, 0, -1};
+  vertices[idx++] = (Vertex){end_x - perp_x, end_y - perp_y, -2, 0, 0, -1};
+  vertices[idx++] = (Vertex){end_x + perp_x, end_y + perp_y, -2, 0, 0, -1};
+
+  *vertex_count = idx;
+}
+
+void draw_hand(Clock *clock, double angle, float length, float thickness) {
+  create_hand_vertices(clock->hand_vertices, &clock->hand_vertex_count, angle,
+                       length, thickness);
+  draw_3d_object(clock, clock->hand_vertices, clock->hand_vertex_count);
+}
+
+void create_marker_vertices(Vertex *vertices, int *vertex_count, int radius) {
+  int marker_length = radius / 12;
+  float marker_thickness = radius / 80.0f;
+  int idx = 0;
 
   for (int hour = 0; hour < 12; hour++) {
     double angle = hour * 30.0 * M_PI / 180.0;
-    float outer_x = center_x + radius * sin(angle);
-    float outer_y = center_y - radius * cos(angle);
-    float inner_x = center_x + (radius - marker_length) * sin(angle);
-    float inner_y = center_y - (radius - marker_length) * cos(angle);
+    float outer_radius = radius;
+    float inner_radius = radius - marker_length;
+
+    float cos_a = cosf(angle), sin_a = sinf(angle);
+    float outer_x = outer_radius * sin_a;
+    float outer_y =
+        outer_radius * cos_a; // Fixed: removed negative to correct Y direction
+    float inner_x = inner_radius * sin_a;
+    float inner_y =
+        inner_radius * cos_a; // Fixed: removed negative to correct Y direction
 
     // Calculate perpendicular vector for thickness
-    float perp_x = -cos(angle) * marker_thickness * 0.5f;
-    float perp_y = -sin(angle) * marker_thickness * 0.5f;
+    float perp_x = -cos_a * marker_thickness * 0.5f;
+    float perp_y = -sin_a * marker_thickness * 0.5f;
 
-    // Triangle 1
-    marker_vertices[vertex_index++] =
-        (Vertex){inner_x - perp_x, inner_y - perp_y};
-    marker_vertices[vertex_index++] =
-        (Vertex){inner_x + perp_x, inner_y + perp_y};
-    marker_vertices[vertex_index++] =
-        (Vertex){outer_x + perp_x, outer_y + perp_y};
+    // Front face
+    vertices[idx++] = (Vertex){inner_x - perp_x, inner_y - perp_y, 3, 0, 0, 1};
+    vertices[idx++] = (Vertex){inner_x + perp_x, inner_y + perp_y, 3, 0, 0, 1};
+    vertices[idx++] = (Vertex){outer_x + perp_x, outer_y + perp_y, 3, 0, 0, 1};
 
-    // Triangle 2
-    marker_vertices[vertex_index++] =
-        (Vertex){inner_x - perp_x, inner_y - perp_y};
-    marker_vertices[vertex_index++] =
-        (Vertex){outer_x + perp_x, outer_y + perp_y};
-    marker_vertices[vertex_index++] =
-        (Vertex){outer_x - perp_x, outer_y - perp_y};
+    vertices[idx++] = (Vertex){inner_x - perp_x, inner_y - perp_y, 3, 0, 0, 1};
+    vertices[idx++] = (Vertex){outer_x + perp_x, outer_y + perp_y, 3, 0, 0, 1};
+    vertices[idx++] = (Vertex){outer_x - perp_x, outer_y - perp_y, 3, 0, 0, 1};
+
+    // Back face
+    vertices[idx++] =
+        (Vertex){inner_x + perp_x, inner_y + perp_y, -3, 0, 0, -1};
+    vertices[idx++] =
+        (Vertex){inner_x - perp_x, inner_y - perp_y, -3, 0, 0, -1};
+    vertices[idx++] =
+        (Vertex){outer_x - perp_x, outer_y - perp_y, -3, 0, 0, -1};
+
+    vertices[idx++] =
+        (Vertex){inner_x + perp_x, inner_y + perp_y, -3, 0, 0, -1};
+    vertices[idx++] =
+        (Vertex){outer_x - perp_x, outer_y - perp_y, -3, 0, 0, -1};
+    vertices[idx++] =
+        (Vertex){outer_x + perp_x, outer_y + perp_y, -3, 0, 0, -1};
   }
 
-  glBindBuffer(GL_ARRAY_BUFFER, clock->vbo);
-  glBufferData(GL_ARRAY_BUFFER, vertex_index * sizeof(Vertex), marker_vertices,
-               GL_DYNAMIC_DRAW);
+  *vertex_count = idx;
+}
 
-  glBindVertexArray(clock->vao);
-  glDrawArrays(GL_TRIANGLES, 0, vertex_index);
+void draw_hour_markers(Clock *clock, int radius) {
+  Vertex marker_vertices[12 * 12]; // 12 markers, 12 triangles per marker
+  int vertex_count;
+  create_marker_vertices(marker_vertices, &vertex_count, radius);
+  draw_3d_object(clock, marker_vertices, vertex_count);
 }
 
 int get_current_time(int *hours, int *minutes, int *seconds,
@@ -211,37 +353,53 @@ int get_current_time(int *hours, int *minutes, int *seconds,
 }
 
 void render_clock(Clock *clock) {
-  glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
+  glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   glUseProgram(clock->shader_program);
 
-  // Set projection matrix
-  float projection[16];
-  create_projection_matrix(projection, WINDOW_WIDTH * clock->scale_factor,
-                           WINDOW_HEIGHT * clock->scale_factor);
+  // Set up 3D matrices
+  float projection[16], view[16], model[16];
+
+  // Perspective projection
+  create_perspective_matrix(projection, 45.0f,
+                            (float)WINDOW_WIDTH / WINDOW_HEIGHT, 1.0f, 1000.0f);
   GLint proj_loc = glGetUniformLocation(clock->shader_program, "projection");
   glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection);
 
-  int scaled_center_x = (int)(CENTER_X * clock->scale_factor);
-  int scaled_center_y = (int)(CENTER_Y * clock->scale_factor);
+  // View matrix (camera position) - fixed Y-up vector
+  create_view_matrix(view, 0, 0, 400, 0, 0, 0, 0, -1,
+                     0); // Flipped Y-up to match clock orientation
+  GLint view_loc = glGetUniformLocation(clock->shader_program, "view");
+  glUniformMatrix4fv(view_loc, 1, GL_FALSE, view);
+
+  // Model matrix (identity for now)
+  create_identity_matrix(model);
+  GLint model_loc = glGetUniformLocation(clock->shader_program, "model");
+  glUniformMatrix4fv(model_loc, 1, GL_FALSE, model);
+
+  // Set up lighting
+  GLint light_pos_loc = glGetUniformLocation(clock->shader_program, "lightPos");
+  GLint light_color_loc =
+      glGetUniformLocation(clock->shader_program, "lightColor");
+  GLint view_pos_loc = glGetUniformLocation(clock->shader_program, "viewPos");
+
+  glUniform3f(light_pos_loc, 200.0f, 200.0f, 300.0f);
+  glUniform3f(light_color_loc, 1.0f, 1.0f, 1.0f);
+  glUniform3f(view_pos_loc, 0.0f, 0.0f, 400.0f);
+
   int scaled_radius = (int)(CLOCK_RADIUS * clock->scale_factor);
 
-  // Update circle vertices for current scale
-  // TODO - this looks like duplication
-  const int segments = 720;
-  for (int i = 0; i <= segments; i++) {
-    float angle = (float)i * 2.0f * M_PI / segments;
-    clock->circle_vertices[i].x = scaled_center_x + scaled_radius * cosf(angle);
-    clock->circle_vertices[i].y = scaled_center_y + scaled_radius * sinf(angle);
-  }
-
-  // Set white color for clock outline and markers
+  // Set color for clock face and markers
   GLint color_loc = glGetUniformLocation(clock->shader_program, "color");
-  glUniform3f(color_loc, 1.0f, 1.0f, 1.0f);
+  glUniform3f(color_loc, 0.8f, 0.8f, 0.9f);
 
-  draw_circle_outline(clock);
-  draw_hour_markers(clock, scaled_center_x, scaled_center_y, scaled_radius);
+  // Draw clock face (3D cylinder)
+  draw_3d_object(clock, clock->circle_vertices, clock->circle_vertex_count);
+
+  // Draw hour markers
+  glUniform3f(color_loc, 1.0f, 1.0f, 1.0f);
+  draw_hour_markers(clock, scaled_radius);
 
   int hours, minutes, seconds, milliseconds;
   if (get_current_time(&hours, &minutes, &seconds, &milliseconds) != 0) {
@@ -249,39 +407,36 @@ void render_clock(Clock *clock) {
     exit(EXIT_FAILURE);
   }
 
-  double hour_angle = (hours * 30.0) + (minutes * 0.5);
-  double minute_angle = (minutes * 6.0) + (seconds * 0.1);
-  double second_angle = (seconds * 6.0) + (milliseconds * 0.006);
+  // Ensure clockwise rotation - angles are measured from 12 o'clock position
+  double hour_angle =
+      -((hours * 30.0) + (minutes * 0.5)); // Negative for clockwise
+  double minute_angle =
+      -((minutes * 6.0) + (seconds * 0.1)); // Negative for clockwise
+  double second_angle =
+      -((seconds * 6.0) + (milliseconds * 0.006)); // Negative for clockwise
 
-  // Draw hour and minute hands in white
-  glUniform3f(color_loc, 1.0f, 1.0f, 1.0f);
-  draw_hand(clock, scaled_center_x, scaled_center_y, hour_angle,
-            (int)(120 * clock->scale_factor), (int)(6 * clock->scale_factor));
-  draw_hand(clock, scaled_center_x, scaled_center_y, minute_angle,
-            (int)(180 * clock->scale_factor), (int)(4 * clock->scale_factor));
+  // Draw hour hand in dark gray
+  glUniform3f(color_loc, 0.3f, 0.3f, 0.3f);
+  draw_hand(clock, hour_angle, 120 * clock->scale_factor,
+            8 * clock->scale_factor);
+
+  // Draw minute hand in dark gray
+  glUniform3f(color_loc, 0.3f, 0.3f, 0.3f);
+  draw_hand(clock, minute_angle, 180 * clock->scale_factor,
+            6 * clock->scale_factor);
 
   // Draw second hand in red
-  glUniform3f(color_loc, 1.0f, 0.0f, 0.0f);
-  draw_hand(clock, scaled_center_x, scaled_center_y, second_angle,
-            (int)(200 * clock->scale_factor), (int)(2 * clock->scale_factor));
+  glUniform3f(color_loc, 1.0f, 0.1f, 0.1f);
+  draw_hand(clock, second_angle, 200 * clock->scale_factor,
+            3 * clock->scale_factor);
 
-  // Draw center circle in white
-  glUniform3f(color_loc, 1.0f, 1.0f, 1.0f);
-  const int center_segments = 32;
-  Vertex center_vertices[center_segments + 1];
-  int small_radius = (int)(8 * clock->scale_factor);
-
-  for (int i = 0; i <= center_segments; i++) {
-    float angle = (float)i * 2.0f * M_PI / center_segments;
-    center_vertices[i].x = scaled_center_x + small_radius * cosf(angle);
-    center_vertices[i].y = scaled_center_y + small_radius * sinf(angle);
-  }
-
-  glBindBuffer(GL_ARRAY_BUFFER, clock->vbo);
-  glBufferData(GL_ARRAY_BUFFER, (center_segments + 1) * sizeof(Vertex),
-               center_vertices, GL_DYNAMIC_DRAW);
-  glBindVertexArray(clock->vao);
-  glDrawArrays(GL_LINE_STRIP, 0, center_segments + 1);
+  // Draw center circle
+  glUniform3f(color_loc, 0.9f, 0.9f, 0.9f);
+  Vertex center_vertices[120];
+  int center_vertex_count;
+  create_circle_outline_3d(center_vertices, &center_vertex_count,
+                           12 * clock->scale_factor, 20);
+  draw_3d_object(clock, center_vertices, center_vertex_count);
 
   SDL_GL_SwapWindow(clock->window);
 }
@@ -325,6 +480,9 @@ int init_clock(Clock *clock) {
   // Create shader program
   clock->shader_program = create_shader_program();
 
+  // Enable depth testing for 3D
+  glEnable(GL_DEPTH_TEST);
+
   // Create VAO and VBO
   glGenVertexArrays(1, &clock->vao);
   glGenBuffers(1, &clock->vbo);
@@ -332,23 +490,32 @@ int init_clock(Clock *clock) {
   glBindVertexArray(clock->vao);
   glBindBuffer(GL_ARRAY_BUFFER, clock->vbo);
 
-  // Set vertex attribute pointers
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
+  // Set vertex attribute pointers for 3D position and normal
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
   glEnableVertexAttribArray(0);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
 
   // Set viewport
   int width, height;
   SDL_GetWindowSizeInPixels(clock->window, &width, &height);
   glViewport(0, 0, width, height);
 
-  // Precompute circle points for main clock face
+  // Precompute 3D geometry for main clock face
+  clock->circle_vertices =
+      malloc(1000 * sizeof(Vertex)); // Allocate enough for circle outline
   precompute_circle(clock, (int)(CLOCK_RADIUS * clock->scale_factor));
+
+  // Allocate memory for hand vertices
+  clock->hand_vertices = malloc(100 * sizeof(Vertex));
 
   return 1;
 }
 
 void cleanup_clock(Clock *clock) {
   free(clock->circle_vertices);
+  free(clock->hand_vertices);
 
   if (clock->vao)
     glDeleteVertexArrays(1, &clock->vao);
