@@ -233,15 +233,14 @@ void draw_3d_object(Clock *clock, Vertex *vertices, int vertex_count) {
 void create_hand_vertices(Vertex *vertices, int *vertex_count, double angle,
                           float length, float thickness) {
   double radians = angle * M_PI / 180.0;
-  float end_x = length * sin(radians);
-  float end_y =
-      length * cos(radians); // Fixed: removed negative to correct Y direction
+  float end_x = -length * sin(radians);  // Negative to flip X axis
+  float end_y = length * cos(radians);   // Positive for correct Y orientation
 
   float half_thick = thickness * 0.5f;
 
-  // Calculate perpendicular vector for width
-  float perp_x = -cos(radians) * half_thick;
-  float perp_y = -sin(radians) * half_thick;
+  // Calculate proper perpendicular vector for consistent thickness
+  float perp_x = cos(radians) * half_thick;   // Flipped for correct X direction
+  float perp_y = sin(radians) * half_thick;   // Always perpendicular to hand direction
 
   int idx = 0;
 
@@ -284,12 +283,10 @@ void create_marker_vertices(Vertex *vertices, int *vertex_count, int radius) {
     float inner_radius = radius - marker_length;
 
     float cos_a = cosf(angle), sin_a = sinf(angle);
-    float outer_x = outer_radius * sin_a;
-    float outer_y =
-        outer_radius * cos_a; // Fixed: removed negative to correct Y direction
-    float inner_x = inner_radius * sin_a;
-    float inner_y =
-        inner_radius * cos_a; // Fixed: removed negative to correct Y direction
+    float outer_x = -outer_radius * sin_a;  // Negative to flip X axis
+    float outer_y = outer_radius * cos_a;   // Positive for correct Y orientation
+    float inner_x = -inner_radius * sin_a;  // Negative to flip X axis
+    float inner_y = inner_radius * cos_a;   // Positive for correct Y orientation
 
     // Calculate perpendicular vector for thickness
     float perp_x = -cos_a * marker_thickness * 0.5f;
@@ -367,9 +364,8 @@ void render_clock(Clock *clock) {
   GLint proj_loc = glGetUniformLocation(clock->shader_program, "projection");
   glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection);
 
-  // View matrix (camera position) - fixed Y-up vector
-  create_view_matrix(view, 0, 0, 400, 0, 0, 0, 0, -1,
-                     0); // Flipped Y-up to match clock orientation
+  // View matrix (camera position)
+  create_view_matrix(view, 0, 0, 400, 0, 0, 0, 0, 1, 0);  // Standard Y-up vector
   GLint view_loc = glGetUniformLocation(clock->shader_program, "view");
   glUniformMatrix4fv(view_loc, 1, GL_FALSE, view);
 
@@ -407,13 +403,10 @@ void render_clock(Clock *clock) {
     exit(EXIT_FAILURE);
   }
 
-  // Ensure clockwise rotation - angles are measured from 12 o'clock position
-  double hour_angle =
-      -((hours * 30.0) + (minutes * 0.5)); // Negative for clockwise
-  double minute_angle =
-      -((minutes * 6.0) + (seconds * 0.1)); // Negative for clockwise
-  double second_angle =
-      -((seconds * 6.0) + (milliseconds * 0.006)); // Negative for clockwise
+  // Calculate angles for clockwise rotation from 12 o'clock position
+  double hour_angle = -((hours * 30.0) + (minutes * 0.5));
+  double minute_angle = -((minutes * 6.0) + (seconds * 0.1));
+  double second_angle = -((seconds * 6.0) + (milliseconds * 0.006));
 
   // Draw hour hand in dark gray
   glUniform3f(color_loc, 0.3f, 0.3f, 0.3f);
