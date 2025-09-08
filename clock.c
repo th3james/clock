@@ -233,14 +233,15 @@ void draw_3d_object(Clock *clock, Vertex *vertices, int vertex_count) {
 void create_hand_vertices(Vertex *vertices, int *vertex_count, double angle,
                           float length, float thickness) {
   double radians = angle * M_PI / 180.0;
-  float end_x = -length * sin(radians);  // Negative to flip X axis
-  float end_y = length * cos(radians);   // Positive for correct Y orientation
+  float end_x = -length * sin(radians); // Negative to flip X axis
+  float end_y = length * cos(radians);  // Positive for correct Y orientation
 
   float half_thick = thickness * 0.5f;
 
   // Calculate proper perpendicular vector for consistent thickness
-  float perp_x = cos(radians) * half_thick;   // Flipped for correct X direction
-  float perp_y = sin(radians) * half_thick;   // Always perpendicular to hand direction
+  float perp_x = cos(radians) * half_thick; // Flipped for correct X direction
+  float perp_y =
+      sin(radians) * half_thick; // Always perpendicular to hand direction
 
   int idx = 0;
 
@@ -283,10 +284,10 @@ void create_marker_vertices(Vertex *vertices, int *vertex_count, int radius) {
     float inner_radius = radius - marker_length;
 
     float cos_a = cosf(angle), sin_a = sinf(angle);
-    float outer_x = -outer_radius * sin_a;  // Negative to flip X axis
-    float outer_y = outer_radius * cos_a;   // Positive for correct Y orientation
-    float inner_x = -inner_radius * sin_a;  // Negative to flip X axis
-    float inner_y = inner_radius * cos_a;   // Positive for correct Y orientation
+    float outer_x = -outer_radius * sin_a; // Negative to flip X axis
+    float outer_y = outer_radius * cos_a;  // Positive for correct Y orientation
+    float inner_x = -inner_radius * sin_a; // Negative to flip X axis
+    float inner_y = inner_radius * cos_a;  // Positive for correct Y orientation
 
     // Calculate perpendicular vector for thickness
     float perp_x = -cos_a * marker_thickness * 0.5f;
@@ -358,14 +359,15 @@ void render_clock(Clock *clock) {
   // Set up 3D matrices
   float projection[16], view[16], model[16];
 
-  // Perspective projection
+  // Perspective projection - extended far plane for greater camera distance
   create_perspective_matrix(projection, 45.0f,
-                            (float)WINDOW_WIDTH / WINDOW_HEIGHT, 1.0f, 1000.0f);
+                            (float)WINDOW_WIDTH / WINDOW_HEIGHT, 1.0f, 2000.0f);
   GLint proj_loc = glGetUniformLocation(clock->shader_program, "projection");
   glUniformMatrix4fv(proj_loc, 1, GL_FALSE, projection);
 
-  // View matrix (camera position)
-  create_view_matrix(view, 0, 0, 400, 0, 0, 0, 0, 1, 0);  // Standard Y-up vector
+  // View matrix (camera position) - moved camera back for full clock view
+  create_view_matrix(view, 0, 0, 1300, 0, 0, 0, 0, 1,
+                     0); // Moved camera much further back
   GLint view_loc = glGetUniformLocation(clock->shader_program, "view");
   glUniformMatrix4fv(view_loc, 1, GL_FALSE, view);
 
@@ -382,7 +384,8 @@ void render_clock(Clock *clock) {
 
   glUniform3f(light_pos_loc, 200.0f, 200.0f, 300.0f);
   glUniform3f(light_color_loc, 1.0f, 1.0f, 1.0f);
-  glUniform3f(view_pos_loc, 0.0f, 0.0f, 400.0f);
+  glUniform3f(view_pos_loc, 0.0f, 0.0f,
+              1300.0f); // Updated to match camera position
 
   int scaled_radius = (int)(CLOCK_RADIUS * clock->scale_factor);
 
